@@ -1,0 +1,127 @@
+## Running on Google Cloud
+==========================
+
+# CD to working folder
+cd /Users/shiv/dev/kaggleTSA
+
+# Login to google cloud
+gcloud auth login
+
+# Export variable.
+export GCS_WORK_FOLDER=${YOUR_GCS_BUCKET}/kaggleTSA
+
+# Create config file. If you don't have one yet.
+sed -e 's?PATH_TO_BE_CONFIGURED?'gs://${GCS_WORK_FOLDER}/train'?g' -e 's?mscoco?objects?'  ../originals/faster_rcnn_resnet101_coco.config > train/faster_rcnn_resnet101_cloud.config
+Update number of classes, max_proposals and eval setting.
+
+# transfer the train folder to cloud.
+gsutil cp train/objects_* gs://${GCS_WORK_FOLDER}/train/
+
+export MODEL_NAME=faster_rcnn_resnet101 # ssd_mobilenet_v1 , faster_rcnn_resnet101 , faster_rcnn_inception_resnet_v2 
+
+# Copy updated config file. 
+gsutil cp  train/pipeline.config gs://${GCS_WORK_FOLDER}/train/${MODEL_NAME}/
+
+# Start training. 
+gcloud ml-engine jobs submit training `whoami`_object_detection_`date +%s` \
+    --job-dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME} \
+    --packages train/object_detection-0.1.tar.gz,train/slim-0.1.tar.gz \
+    --module-name object_detection.train \
+    --region us-central1 \
+    --config train/cloud.yml  \
+    -- \
+    --train_dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}  \
+    --pipeline_config_path=gs://${GCS_WORK_FOLDER}/train/${MODEL_NAME}/pipeline.config
+
+gcloud ml-engine jobs submit training object_detection_eval_`date +%s` \
+    --job-dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}   \
+    --packages train/object_detection-0.1.tar.gz,train/slim-0.1.tar.gz \
+    --module-name object_detection.eval \
+    --region us-central1 \
+    --scale-tier BASIC_GPU \
+    -- \
+    --checkpoint_dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}   \
+    --eval_dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}   \
+    --pipeline_config_path=gs://${GCS_WORK_FOLDER}/train/${MODEL_NAME}/pipeline.config
+
+
+tensorboard --logdir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}
+
+# Creating inference graph.
+===========================
+
+cd inference
+
+export CHECKPOINT_NUMBER=50000
+
+gsutil cp gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}/model.ckpt-${CHK_MODEL_NUMBER}* .
+
+python ../../models/research/object_detection/export_inference_graph.py \
+    --input_type image_tensor \
+    --pipeline_config_path ../train/pipeline.config  \
+    --trained_checkpoint_prefix model.ckpt-${CHECKPOINT_NUMBER} \
+    --output_directory .
+
+python ../../models/research/object_detection/export_inference_graph.py  \
+    --input_type encoded_image_string_tensor \
+    --pipeline_config_path ../train/pipeline.config  \
+    --trained_checkpoint_prefix model.ckpt-${CHECKPOINT_NUMBER} \
+    --output_directory .
+
+# Generate inference graph.
+gcloud ml-engine jobs submit training shiv_exportgraph_`date +%s` \
+    --job-dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}   \
+    --packages train/object_detection-0.1.tar.gz,train/slim-0.1.tar.gz \
+    --module-name object_detection.export_inference_graph \
+    --region us-central1 \
+    --scale-tier BASIC \
+    --runtime-version=1.2 \
+    -- \
+    --input_type encoded_image_string_tensor \
+    --pipeline_config_path=gs://${GCS_WORK_FOLDER}/train/${MODEL_NAME}/pipeline.config \
+    --trained_checkpoint_prefix gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}/model.ckpt-${CHECKPOINT_NUMBER} \
+    --output_directory=gs://${GCS_WORK_FOLDER}/inference
+
+#Inference on the google cloud
+==============================
+
+gsutil cp inputs.json gs://${GCS_WORK_FOLDER}/
+
+# Run Inference
+gcloud ml-engine jobs submit training shiv_inference_`date +%s` \
+    --job-dir=gs://${GCS_WORK_FOLDER}/joboutput/${MODEL_NAME}   \
+    --package-path ./cloudpkg \
+    --module-name cloudpkg.RunInference \
+    --packages train/object_detection-0.1.tar.gz,train/slim-0.1.tar.gz \
+    --region us-central1 \
+    --scale-tier BASIC_GPU \
+    --runtime-version=1.2 \
+    -- \
+    --input_path=gs://${GCS_WORK_FOLDER}/inputs_stage2.json \
+    --output_path=gs://${GCS_WORK_FOLDER}/objectsDetected_stage2.pkl \
+    --graph_file_path=gs://${GCS_WORK_FOLDER}/inference/frozen_inference_graph.pb 
+
+# Run Inference locally. 
+python ./cloudpkg/RunInference.py --input_path=./inputs.json --output_path=./objectsDetected.pkl --graph_file_path=./inference/frozen_inference_graph.pb --job-dir ./
+
+gsutil cp gs://${GCS_WORK_FOLDER}/objectsDetected.pkl .
+
+# Batch Check prediciton working correctly. 
+===========================================
+gcloud ml-engine local predict --model-dir inference/cloudPrediction/saved_model --json-instances=./sample.json
+
+gsutil cp ./inputs.tfr gs://${GCS_WORK_FOLDER}/data_dir/
+
+gsutil cp -r cloudPrediction/* gs://${GCS_WORK_FOLDER}/model_dir/ 
+
+gcloud ml-engine jobs submit prediction `whoami`_batch_prediction_`date +%s` --data-format=TF_RECORD \
+    --input-paths=gs://${GCS_WORK_FOLDER}/data_dir/inputs.tfr \
+    --output-path gs://${GCS_WORK_FOLDER}/predictouput \
+    --data-format TF_RECORD \
+    --region us-central1 \
+    --model-dir gs://${GCS_WORK_FOLDER}/model_dir/saved_model \
+    --runtime-version=1.2
+
+gcloud ml-engine versions create ${YOUR_VERSION} --model ${YOUR_MODEL} --origin=gs://${GCS_WORK_FOLDER}/model_dir/saved_model --runtime-version=1.2
+
+

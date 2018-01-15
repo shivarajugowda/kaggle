@@ -1,0 +1,21 @@
+item {
+  id: 1
+  name: 'Head'
+}
+
+item {
+  id: 2
+  name: 'Hand'
+}
+
+item {
+  id: 3
+  name: 'Groin'
+}
+
+item {
+  id: 4
+  name: 'Contraband'
+}
+
+
