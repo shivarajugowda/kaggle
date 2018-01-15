@@ -1,6 +1,6 @@
-# Kaggle [TSA Competion](https://www.kaggle.com/c/passenger-screening-algorithm-challenge#description)
+# Kaggle [TSA Competition](https://www.kaggle.com/c/passenger-screening-algorithm-challenge#description)
 
-- Main.py : Inference
+- Main.py : Main driver file
 - cloudpkg/RunInference.py : Run object detection inference in batches on Google Cloud.
 - IOHandler.py : IO related functions
 - RunInstrGoogleCloud.txt : Instructions for running Object Detection training and inference on Google Cloud.
